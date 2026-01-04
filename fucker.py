@@ -1497,7 +1497,14 @@ class Fucker:
                                 tprint(
                                     f"{prefix*4}__Failed to convert ppt {ppt['name']}, {e}")
 
-                    is_success, correct_count, total_count = exam_ctx.startFuck(referenceMaterials=ppts)
+                    try:
+                        is_success, correct_count, total_count = exam_ctx.startFuck(referenceMaterials=ppts)
+                    except Exception as e:
+                        logger.exception(e)
+                        tprint(prefix*4)
+                        tprint(
+                            f"{prefix*4}__Exam crashed, skipping this knowledge point: {e}")
+                        break
 
                     tprint(prefix*4)
                     tprint(
@@ -1838,8 +1845,11 @@ class ExamCtx:
 
         # 选项数量少于2个，答案就是选项内容
         if len(choices) < 2:
+            if len(choices) == 0:
+                return None, "no choices"
             answer = choices[0]["id"]
-            return [answer]
+            time.sleep(randint(3, 5))
+            return [answer], "only option"
 
         try:
             # 选项数量大于2个，使用AI生成答案
@@ -1887,103 +1897,105 @@ class ExamCtx:
 
         # 打开考试
         self.openExam()
+        try:
+            # 获取考试试卷内容
+            sheetContent = self.getSheetContent()
+            if sheetContent is None:
+                raise ValueError("sheet has no content")
 
-        # 获取考试试卷内容
-        sheetContent = self.getSheetContent()
-        if sheetContent is None:
-            raise ValueError("sheet has no content")
-
-        # 遍历试卷内容，获取每道题目的答案
-        index = 0
-        total_questions = len(sheetContent)
-        if self.progress_view :
-            progressBar(index, total_questions, "fucking exam",
-                        suffix=f"{index}/{total_questions}")
-        for questionDict in sheetContent:
-            # 获取题目内容
-            questionContentDict = self.getQuestionContent(
-                questionDict["questionId"], questionDict.get("version", 1))
-
-            if questionContentDict is None:
-                logger.error(
-                    f"getQuestionContent failed: {questionDict['questionId']}")
-                continue
-
-            # 获取题目答案
-            questionContentDict.version = questionDict.get("version", 1)
-            answer, note = self.getQuestionAnswer(questionContentDict)
-
-            if answer is None:
-                logger.error(
-                    f"getQuestionAnswer failed: {questionDict['questionId']}")
-                continue
-
-            # 保存答案
-            self.saveAnswer(questionDict["questionId"], answer)
-
+            # 遍历试卷内容，获取每道题目的答案
+            index = 0
+            total_questions = len(sheetContent)
             if self.progress_view :
-                action = f"fucking exam"
-                index += 1
-                progressBar(index, total_questions, action,
-                            suffix=f"({index}/{total_questions}) {note}")
+                progressBar(index, total_questions, "fucking exam",
+                            suffix=f"{index}/{total_questions}")
+            for questionDict in sheetContent:
+                # 获取题目内容
+                questionContentDict = self.getQuestionContent(
+                    questionDict["questionId"], questionDict.get("version", 1))
 
-        # 提交考试
-        self.submitExam()
+                if questionContentDict is None:
+                    logger.error(
+                        f"getQuestionContent failed: {questionDict['questionId']}")
+                    continue
 
-        # 重新取得试卷内容，检查是否答对了，并更新答案缓存
-        total_questions = len(sheetContent)
-        correct_questions = 0
-        for questionDict in sheetContent:
-            # 取得版本
-            version = questionDict.get("version", 1)
-            # 获取题目内容
-            questionContentDict = self.getQuestionContent(
-                questionDict["questionId"], version)
+                # 获取题目答案
+                questionContentDict.version = questionDict.get("version", 1)
+                answer, note = self.getQuestionAnswer(questionContentDict)
 
-            if questionContentDict is None:
-                logger.error(
-                    f"getQuestionContent failed: {questionDict['questionId']}")
-                continue
+                if answer is None:
+                    logger.error(
+                        f"getQuestionAnswer failed: {questionDict['questionId']}")
+                    continue
 
-            # 取得做题结果
-            result = questionContentDict.get("userAnswerVo", None)
-            if result is None:
-                logger.error(
-                    f"userAnswerVo not found: {questionDict['questionId']}")
-                continue
-            # 计算得分
-            if result[0]["isCorrect"] == 1:
-                correct_questions += 1
+                # 保存答案
+                self.saveAnswer(questionDict["questionId"], answer)
+
+                if self.progress_view :
+                    action = f"fucking exam"
+                    index += 1
+                    progressBar(index, total_questions, action,
+                                suffix=f"({index}/{total_questions}) {note}")
+
+            # 提交考试
+            self.submitExam()
+
+            # 重新取得试卷内容，检查是否答对了，并更新答案缓存
+            total_questions = len(sheetContent)
+            correct_questions = 0
+            for questionDict in sheetContent:
+                # 取得版本
+                version = questionDict.get("version", 1)
+                # 获取题目内容
+                questionContentDict = self.getQuestionContent(
+                    questionDict["questionId"], version)
+
+                if questionContentDict is None:
+                    logger.error(
+                        f"getQuestionContent failed: {questionDict['questionId']}")
+                    continue
+
+                # 取得做题结果
+                result = questionContentDict.get("userAnswerVo", None)
+                if result is None:
+                    logger.error(
+                        f"userAnswerVo not found: {questionDict['questionId']}")
+                    continue
+                # 计算得分
+                if result[0]["isCorrect"] == 1:
+                    correct_questions += 1
+                else:
+                    logger.error(
+                        f"Question {questionDict['questionId']} is not correct")
+
+                # 获取题目答案
+                answer = [{"id": option["id"], "content": option["content"]}
+                          for option in questionContentDict["optionVos"]
+                          if option.get("isCorrect", 0) == 1]
+                answer_str = '#@#'.join([str(option["id"]) for option in answer])
+                answer_content_str = '\n'.join(
+                    [option["content"] for option in answer])
+
+                # 保存答案
+                answer_dict = {
+                    "question": questionContentDict.get("content", ""),
+                    "answer": answer_str,
+                    "answer_content": answer_content_str,
+                    "questionDict": questionContentDict,
+                }
+                self.setAnswer(questionDict["questionId"], version, answer_dict)
+
+            # 如果所有题目都做对了，则退出考试
+            if correct_questions == total_questions:
+                logger.info(
+                    f"Exam {self.examTestId} is finished, score: {correct_questions}/{total_questions}")
+                return True, correct_questions, total_questions
             else:
-                logger.error(
-                    f"Question {questionDict['questionId']} is not correct")
-
-            # 获取题目答案
-            answer = [{"id": option["id"], "content": option["content"]}
-                      for option in questionContentDict["optionVos"]
-                      if option.get("isCorrect", 0) == 1]
-            answer_str = '#@#'.join([str(option["id"]) for option in answer])
-            answer_content_str = '\n'.join(
-                [option["content"] for option in answer])
-
-            # 保存答案
-            answer_dict = {
-                "question": questionContentDict.get("content", ""),
-                "answer": answer_str,
-                "answer_content": answer_content_str,
-                "questionDict": questionContentDict,
-            }
-            self.setAnswer(questionDict["questionId"], version, answer_dict)
-
-        # 如果所有题目都做对了，则退出考试
-        if correct_questions == total_questions:
-            logger.info(
-                f"Exam {self.examTestId} is finished, score: {correct_questions}/{total_questions}")
-            return True, correct_questions, total_questions
-        else:
-            logger.info(
-                f"Exam {self.examTestId} is not finished, score: {correct_questions}/{total_questions}")
-            return False, correct_questions, total_questions
+                logger.info(
+                    f"Exam {self.examTestId} is not finished, score: {correct_questions}/{total_questions}")
+                return False, correct_questions, total_questions
+        finally:
+            self.examStopped = True
 
 class Openai:
     def __init__(self, baseUrl: str = "", apiKey: str = "", modelName: str = "", useZhidao: bool = False, zhiDaosession: requests.Session = None, stream: bool = False, extra: dict = {}):
