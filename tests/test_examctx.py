@@ -10,6 +10,7 @@ class ExamCtxGetQuestionAnswerTests(unittest.TestCase):
         ctx.allAnswerCache = {}
         ctx.answerCache = {}
         ctx.referenceMaterials = []
+        ctx.unsupportedQuestionTypes = set()
         return ctx
 
     @patch("fucker.time.sleep", return_value=None)
@@ -54,6 +55,7 @@ class ExamCtxGetQuestionAnswerTests(unittest.TestCase):
         answer, note = ctx.getQuestionAnswer(q)
         self.assertIsNone(answer)
         self.assertIn("unsupported type", note)
+        self.assertIn(4, ctx.unsupportedQuestionTypes)
 
 
 class ExamCtxStartFuckTests(unittest.TestCase):

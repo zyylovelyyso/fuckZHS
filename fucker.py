@@ -1542,6 +1542,12 @@ class Fucker:
                     tprint(
                         f"{prefix*4}__Exam attempt: Success: {is_success}, Score: {correct_count}/{total_count}")
 
+                    if getattr(exam_ctx, "unsupportedQuestionTypes", None):
+                        tprint(prefix*4)
+                        tprint(
+                            f"{prefix*4}__Unsupported question types encountered: {sorted(exam_ctx.unsupportedQuestionTypes)}, skipping this knowledge point")
+                        break
+
                     if is_success:
                         break
 
@@ -1591,6 +1597,7 @@ class ExamCtx:
         self.sheetContent = None
         self.timeUpdateIndex = 0
         self.examStopped = False
+        self.unsupportedQuestionTypes = set()
 
         if aiConfig.get("enabled", False) and not aiConfig.get("use_zhidao_ai", False):
             opConf: dict = aiConfig.get("openai", {})
@@ -1909,6 +1916,7 @@ class ExamCtx:
 
         # 非选择/判断题：目前不支持，跳过（避免卡死在重试）
         if questionType not in {1, 2, 14}:
+            self.unsupportedQuestionTypes.add(questionType)
             return None, f"unsupported type {questionType}"
 
         # 选项数量少于2个，答案就是选项内容
