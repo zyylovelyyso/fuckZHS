@@ -1444,8 +1444,29 @@ class Fucker:
 
                 # 开始测试部分
                 tried_count = 0
+                max_exam_attempts = aiConfig.get("max_exam_attempts", 6)
+                try:
+                    max_exam_attempts = int(max_exam_attempts)
+                except (TypeError, ValueError):
+                    max_exam_attempts = 6
+                max_exam_attempts = max(1, max_exam_attempts)
+
+                max_same_score_attempts = aiConfig.get("max_same_score_attempts", 2)
+                try:
+                    max_same_score_attempts = int(max_same_score_attempts)
+                except (TypeError, ValueError):
+                    max_same_score_attempts = 2
+                max_same_score_attempts = max(0, max_same_score_attempts)
+
+                last_score = None
+                same_score_count = 0
                 while True:
                     if no_exam:
+                        break
+                    if tried_count >= max_exam_attempts:
+                        tprint(prefix*4)
+                        tprint(
+                            f"{prefix*4}__Max exam attempts reached ({max_exam_attempts}), skipping this knowledge point")
                         break
 
                     tprint(prefix*3)
@@ -1460,16 +1481,19 @@ class Fucker:
                         break
 
                     mastery_score = exam.get("masteryScore", None)
-                    if not mastery_score:
+                    if mastery_score is None:
                         mastery_score = 0
-                    if mastery_score < 30 and tried_count > 4:
-                        tprint(prefix*4)
-                        tprint(
-                            f"{prefix*4}__Mastery score below 30, tried {tried_count} times, giving up")
-                        break
+                    try:
+                        mastery_score_val = float(mastery_score)
+                    except (TypeError, ValueError):
+                        mastery_score_val = 0
 
                     tried_count += 1
-                    if mastery_score is not None and mastery_score > 90:
+                    tprint(prefix*4)
+                    tprint(
+                        f"{prefix*4}__Mastery score: {mastery_score} (attempt {tried_count}/{max_exam_attempts})")
+
+                    if mastery_score_val > 90:
                         tprint(prefix*4)
                         tprint(
                             f"{prefix*4}__Mastery score already above 90: {exam['masteryScore']}")
@@ -1517,6 +1541,22 @@ class Fucker:
                     tprint(prefix*4)
                     tprint(
                         f"{prefix*4}__Exam attempt: Success: {is_success}, Score: {correct_count}/{total_count}")
+
+                    if is_success:
+                        break
+
+                    score = (correct_count, total_count)
+                    if last_score == score:
+                        same_score_count += 1
+                    else:
+                        same_score_count = 0
+                        last_score = score
+
+                    if max_same_score_attempts and same_score_count >= max_same_score_attempts:
+                        tprint(prefix*4)
+                        tprint(
+                            f"{prefix*4}__Score not improving after {same_score_count+1} attempts ({correct_count}/{total_count}), skipping this knowledge point")
+                        break
 
                     # random sleep to avoid being detected as a bot
                     time.sleep(math.ceil(uniform(0.5, 1.5)))
@@ -1863,9 +1903,13 @@ class ExamCtx:
         # 选项，只保留有id和content的选项
         choices = [
             {"id": option["id"], "content": option["content"]}
-            for option in questionDict["optionVos"]
+            for option in questionDict.get("optionVos", [])
             if "id" in option and "content" in option
         ]
+
+        # 非选择/判断题：目前不支持，跳过（避免卡死在重试）
+        if questionType not in {1, 2, 14}:
+            return None, f"unsupported type {questionType}"
 
         # 选项数量少于2个，答案就是选项内容
         if len(choices) < 2:
@@ -1898,6 +1942,8 @@ class ExamCtx:
                 answer = self.select_random_answers(choices, 1)
             elif questionType == 2:
                 answer = self.select_random_answers(choices, 2)
+            elif questionType == 14:
+                answer = self.select_random_answers(choices, 1)
 
             time.sleep(randint(3, 5))
 
@@ -1931,18 +1977,26 @@ class ExamCtx:
                 return False, 0, 0
 
             # 遍历试卷内容，获取每道题目的答案
-            index = 0
             total_questions = len(sheetContent)
+            processed_questions = 0
             if self.progress_view :
-                progressBar(index, total_questions, "fucking exam",
-                            suffix=f"{index}/{total_questions}")
+                progressBar(processed_questions, total_questions, "fucking exam",
+                            suffix=f"{processed_questions}/{total_questions}")
             for questionDict in sheetContent:
                 if not hasattr(questionDict, "get"):
                     logger.error(f"Invalid sheetContent item (no .get): {questionDict}")
+                    processed_questions += 1
+                    if self.progress_view:
+                        progressBar(processed_questions, total_questions, "fucking exam",
+                                    suffix=f"({processed_questions}/{total_questions}) invalid sheet item")
                     continue
                 question_id = questionDict.get("questionId", None)
                 if not question_id:
                     logger.error(f"questionId not found in sheetContent item: {questionDict}")
+                    processed_questions += 1
+                    if self.progress_view:
+                        progressBar(processed_questions, total_questions, "fucking exam",
+                                    suffix=f"({processed_questions}/{total_questions}) missing questionId")
                     continue
                 version = questionDict.get("version", 1)
                 # 获取题目内容
@@ -1952,6 +2006,10 @@ class ExamCtx:
                 if questionContentDict is None:
                     logger.error(
                         f"getQuestionContent failed: {question_id}")
+                    processed_questions += 1
+                    if self.progress_view:
+                        progressBar(processed_questions, total_questions, "fucking exam",
+                                    suffix=f"({processed_questions}/{total_questions}) missing content")
                     continue
 
                 # 获取题目答案
@@ -1959,18 +2017,27 @@ class ExamCtx:
                 answer, note = self.getQuestionAnswer(questionContentDict)
 
                 if answer is None:
+                    logger.warning(
+                        f"Skip question {question_id} (type={questionContentDict.get('questionType', None)}): {note}")
+                    processed_questions += 1
+                    if self.progress_view:
+                        progressBar(processed_questions, total_questions, "fucking exam",
+                                    suffix=f"({processed_questions}/{total_questions}) skipped: {note}")
                     logger.error(
                         f"getQuestionAnswer failed: {question_id}")
                     continue
 
                 # 保存答案
-                self.saveAnswer(question_id, answer)
+                saved = self.saveAnswer(question_id, answer)
+                if not saved:
+                    logger.error(f"saveAnswer failed: {question_id}")
+                    note = f"{note}, save failed"
 
+                processed_questions += 1
                 if self.progress_view :
                     action = f"fucking exam"
-                    index += 1
-                    progressBar(index, total_questions, action,
-                                suffix=f"({index}/{total_questions}) {note}")
+                    progressBar(processed_questions, total_questions, action,
+                                suffix=f"({processed_questions}/{total_questions}) {note}")
 
             # 提交考试
             self.submitExam()

@@ -48,6 +48,13 @@ class ExamCtxGetQuestionAnswerTests(unittest.TestCase):
         self.assertEqual(answer, ["1", "2"])
         self.assertEqual(note, "cached")
 
+    def test_unsupported_type_returns_tuple(self):
+        ctx = self._make_ctx()
+        q = {"id": 4, "questionType": 4, "content": "Q", "optionVos": []}
+        answer, note = ctx.getQuestionAnswer(q)
+        self.assertIsNone(answer)
+        self.assertIn("unsupported type", note)
+
 
 class ExamCtxStartFuckTests(unittest.TestCase):
     def test_startFuck_sets_examStopped_on_error(self):
