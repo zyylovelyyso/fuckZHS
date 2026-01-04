@@ -1276,9 +1276,12 @@ class Fucker:
 
             begin_time = time.time()  # real world time
             prefix = self.prefix  # prefix for tree-like print
-            w_lim = os.get_terminal_size().columns-1  # width limit for terminal output
+            try:
+                w_lim = os.get_terminal_size().columns-1  # width limit for terminal output
+            except OSError:
+                w_lim = 80-1
 
-            cakeThemeList = knowledgePoints.cakeThemeList
+            cakeThemeList = knowledgePoints.cakeThemeList or []
         except Exception as e:
             logger.exception(e)
             raise Exception("Failed to get knowledge points")
@@ -1292,6 +1295,11 @@ class Fucker:
                 knowledgeList = theme.knowledgeList
             except Exception as e:
                 logger.exception(e)
+                tprint(prefix*2)
+                tprint(
+                    f"{prefix*2}__Theme {theme.themeName} has no knowledge points")
+                continue
+            if not knowledgeList:
                 tprint(prefix*2)
                 tprint(
                     f"{prefix*2}__Theme {theme.themeName} has no knowledge points")
@@ -1594,44 +1602,60 @@ class ExamCtx:
 
         return answerpath
 
+    def _normalizeAnswerCacheKeys(self, cache: dict) -> dict:
+        normalized = {}
+        if not isinstance(cache, dict):
+            return normalized
+        for raw_key, value in cache.items():
+            key = str(raw_key)
+            questionId = key
+            version = 1
+            if '_' in key:
+                left, right = key.rsplit('_', 1)
+                if left and right.isdigit():
+                    questionId = left
+                    version = int(right)
+            normalized_key = str(questionId) if version == 1 else f"{questionId}_{version}"
+            if isinstance(value, dict) and "version" not in value:
+                value["version"] = version
+            normalized[normalized_key] = value
+        return normalized
+
     def readAnswerCache(self, examTestId):
-        Allanwerpath = self.getAllAnswerpath()
+        self.getAllAnswerpath()
         path = getRealPath(f"aiexamAnswer/{self.courseId}/")
-        files = os.listdir(path)
-        Allcache = {}
+        try:
+            files = os.listdir(path)
+        except FileNotFoundError:
+            files = []
+
+        allcache = {}
         for file in files:
             if file == "data.json":
                 continue
             file_path = os.path.join(path, file)
-            with open(file_path, "r", encoding="utf-8") as f:
-                cache = json.load(f)
-                Allcache.update(cache)
-        
-        self.allAnswerCache = {}
-        for key, value in Allcache.items():
-            if '_' in key:
-                questionId, version = key.split('_')
-                self.allAnswerCache[f"{questionId}_{version}"] = value
-            else:
-                self.allAnswerCache[key] = value
-                # 为没有版本号的答案添加默认版本
-                value['version'] = 1
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    cache = json.load(f)
+                if isinstance(cache, dict):
+                    allcache.update(cache)
+                else:
+                    logger.error(f"Invalid cache file format: {file_path}")
+            except (OSError, json.JSONDecodeError) as e:
+                logger.error(f"Failed to load cache file {file_path}: {e}")
+                continue
 
+        self.allAnswerCache = self._normalizeAnswerCacheKeys(allcache)
 
         answerpath = self.getAnswerpath(examTestId)
-        with open(answerpath, "r", encoding="utf-8") as f:
-            cache = json.load(f)
+        try:
+            with open(answerpath, "r", encoding="utf-8") as f:
+                cache = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to load answer cache {answerpath}: {e}")
+            cache = {}
 
-        # 转换缓存格式以支持版本号
-        self.answerCache = {}
-        for key, value in cache.items():
-            if '_' in key:
-                questionId, version = key.split('_')
-                self.answerCache[f"{questionId}_{version}"] = value
-            else:
-                self.answerCache[key] = value
-                # 为没有版本号的答案添加默认版本
-                value['version'] = 1
+        self.answerCache = self._normalizeAnswerCacheKeys(cache)
 
         return self.answerCache, self.allAnswerCache
 
@@ -1902,6 +1926,9 @@ class ExamCtx:
             sheetContent = self.getSheetContent()
             if sheetContent is None:
                 raise ValueError("sheet has no content")
+            if not sheetContent:
+                logger.error(f"Exam {self.examTestId} sheet has no questions")
+                return False, 0, 0
 
             # 遍历试卷内容，获取每道题目的答案
             index = 0
@@ -1910,26 +1937,34 @@ class ExamCtx:
                 progressBar(index, total_questions, "fucking exam",
                             suffix=f"{index}/{total_questions}")
             for questionDict in sheetContent:
+                if not hasattr(questionDict, "get"):
+                    logger.error(f"Invalid sheetContent item (no .get): {questionDict}")
+                    continue
+                question_id = questionDict.get("questionId", None)
+                if not question_id:
+                    logger.error(f"questionId not found in sheetContent item: {questionDict}")
+                    continue
+                version = questionDict.get("version", 1)
                 # 获取题目内容
                 questionContentDict = self.getQuestionContent(
-                    questionDict["questionId"], questionDict.get("version", 1))
+                    question_id, version)
 
                 if questionContentDict is None:
                     logger.error(
-                        f"getQuestionContent failed: {questionDict['questionId']}")
+                        f"getQuestionContent failed: {question_id}")
                     continue
 
                 # 获取题目答案
-                questionContentDict.version = questionDict.get("version", 1)
+                questionContentDict.version = version
                 answer, note = self.getQuestionAnswer(questionContentDict)
 
                 if answer is None:
                     logger.error(
-                        f"getQuestionAnswer failed: {questionDict['questionId']}")
+                        f"getQuestionAnswer failed: {question_id}")
                     continue
 
                 # 保存答案
-                self.saveAnswer(questionDict["questionId"], answer)
+                self.saveAnswer(question_id, answer)
 
                 if self.progress_view :
                     action = f"fucking exam"
@@ -1944,34 +1979,41 @@ class ExamCtx:
             total_questions = len(sheetContent)
             correct_questions = 0
             for questionDict in sheetContent:
+                if not hasattr(questionDict, "get"):
+                    logger.error(f"Invalid sheetContent item (no .get): {questionDict}")
+                    continue
+                question_id = questionDict.get("questionId", None)
+                if not question_id:
+                    logger.error(f"questionId not found in sheetContent item: {questionDict}")
+                    continue
                 # 取得版本
                 version = questionDict.get("version", 1)
                 # 获取题目内容
                 questionContentDict = self.getQuestionContent(
-                    questionDict["questionId"], version)
+                    question_id, version)
 
                 if questionContentDict is None:
                     logger.error(
-                        f"getQuestionContent failed: {questionDict['questionId']}")
+                        f"getQuestionContent failed: {question_id}")
                     continue
 
                 # 取得做题结果
                 result = questionContentDict.get("userAnswerVo", None)
-                if result is None:
+                if not isinstance(result, list) or not result:
                     logger.error(
-                        f"userAnswerVo not found: {questionDict['questionId']}")
+                        f"userAnswerVo not found: {question_id}")
                     continue
                 # 计算得分
-                if result[0]["isCorrect"] == 1:
+                if isinstance(result[0], dict) and result[0].get("isCorrect", 0) == 1:
                     correct_questions += 1
                 else:
                     logger.error(
-                        f"Question {questionDict['questionId']} is not correct")
+                        f"Question {question_id} is not correct")
 
                 # 获取题目答案
                 answer = [{"id": option["id"], "content": option["content"]}
-                          for option in questionContentDict["optionVos"]
-                          if option.get("isCorrect", 0) == 1]
+                          for option in questionContentDict.get("optionVos", [])
+                          if option.get("isCorrect", 0) == 1 and "id" in option and "content" in option]
                 answer_str = '#@#'.join([str(option["id"]) for option in answer])
                 answer_content_str = '\n'.join(
                     [option["content"] for option in answer])
@@ -1983,7 +2025,7 @@ class ExamCtx:
                     "answer_content": answer_content_str,
                     "questionDict": questionContentDict,
                 }
-                self.setAnswer(questionDict["questionId"], version, answer_dict)
+                self.setAnswer(question_id, version, answer_dict)
 
             # 如果所有题目都做对了，则退出考试
             if correct_questions == total_questions:
