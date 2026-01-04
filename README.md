@@ -1,5 +1,16 @@
 # ZHS Fucker 食用指北
 
+## Fork Notes (zyylovelyyso)
+
+本仓库基于上游项目 `VermiIIi0n/fuckZHS`（MIT License）：https://github.com/VermiIIi0n/fuckZHS
+
+本 fork 的改动（以稳定性/可测试性为主）：
+
+- 修复 AI 课考试在部分异常题目下的解包崩溃：`not enough values to unpack (expected 2, got 1)`
+- 加强缓存读取健壮性：坏 JSON / 异常 key 不再导致崩溃
+- 加强考试流程健壮性：空试卷/缺失字段时跳过；异常时确保停止心跳线程
+- 新增离线回归测试：`tests/test_examctx.py`
+
 ## NEWS
 
 我总觉得有一天这个脚本会被 `404` ，没想到以这种形式实现了，感谢各位对鸽鸽的支持。
